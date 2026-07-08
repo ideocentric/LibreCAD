@@ -132,15 +132,30 @@ make -j6
 APP_FILE=LibreCAD
 OUTPUT_DMG=${APP_FILE}.dmg
 
+# Deploy the Qt frameworks into the bundle. macdeployqt rewrites Mach-O load
+# commands (install_name_tool), which invalidates any existing signature, so the
+# bundle MUST be (re)signed AFTER this step.
+${QT_PATH}macdeployqt ${APP_FILE}.app -verbose=2 -always-overwrite
+
+# Code signing.
+#
+# On Apple Silicon, macOS refuses to launch an arm64 binary whose signature is
+# missing or invalid ("app is damaged"), so signing after macdeployqt is
+# required. With a real Developer ID (-cert=) we sign using the hardened runtime
+# so the result can be notarized; otherwise we fall back to an ad-hoc signature,
+# which is enough for the app to launch (issue #2162).
 if [[ $CODESIGN_IDENTITY ]]
 then
-	${QT_PATH}macdeployqt ${APP_FILE}.app -verbose=2 -dmg -always-overwrite -codesign=$CODESIGN_IDENTITY
+	codesign --force --deep --options runtime --timestamp \
+		--sign "$CODESIGN_IDENTITY" "${APP_FILE}.app"
 else
-	${QT_PATH}macdeployqt ${APP_FILE}.app -verbose=2 -dmg -always-overwrite
+	echo "No signing identity supplied; applying an ad-hoc signature."
+	codesign --force --deep --sign - "${APP_FILE}.app"
 fi
 
-#bz2 compression
-hdiutil convert -shadow -format UDZO -ov -o "$OUTPUT_DMG" "$OUTPUT_DMG"
+# Build the compressed DMG from the signed bundle.
+hdiutil create -volname "$APP_FILE" -srcfolder "${APP_FILE}.app" \
+	-ov -format UDZO "$OUTPUT_DMG"
 
 if [[ -f  "${OUTPUT_DMG}" ]]
 then
@@ -148,8 +163,21 @@ then
 	ls -lh "${OUTPUT_DMG}"
 fi
 
-rm -f "${TMP_DMG}"
+# With a real Developer ID, sign the DMG too and - when notarization credentials
+# are provided via the environment - notarize and staple it. Notarization is
+# skipped by default, so an ordinary build needs no Apple account. Provide either
+# a stored notarytool profile (NOTARIZE_KEYCHAIN_PROFILE) or the individual
+# credentials (NOTARIZE_APPLE_ID + NOTARIZE_TEAM_ID + NOTARIZE_PASSWORD).
 if [[ $CODESIGN_IDENTITY ]]
 then
-	codesign -s $CODESIGN_IDENTITY -v $OUTPUT_DMG
+	codesign --force --timestamp --sign "$CODESIGN_IDENTITY" "$OUTPUT_DMG"
+	if [[ ${NOTARIZE_KEYCHAIN_PROFILE:-} ]]
+	then
+		xcrun notarytool submit "$OUTPUT_DMG" --keychain-profile "$NOTARIZE_KEYCHAIN_PROFILE" --wait
+		xcrun stapler staple "$OUTPUT_DMG"
+	elif [[ ${NOTARIZE_APPLE_ID:-} && ${NOTARIZE_TEAM_ID:-} && ${NOTARIZE_PASSWORD:-} ]]
+	then
+		xcrun notarytool submit "$OUTPUT_DMG" --apple-id "$NOTARIZE_APPLE_ID" --team-id "$NOTARIZE_TEAM_ID" --password "$NOTARIZE_PASSWORD" --wait
+		xcrun stapler staple "$OUTPUT_DMG"
+	fi
 fi
