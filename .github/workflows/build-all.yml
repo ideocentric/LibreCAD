@@ -450,7 +450,7 @@ jobs:
 
   UpdateAssets:
     if: github.repository_owner == 'LibreCAD' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/2.2.1')
-    needs: [BuildLinux, BuildLinuxAarch64, BuildMacOS, BuildMacOSArm64, BuildWindows64, BuildWindowsARM64, BuildSnap]
+    needs: [BuildLinux, BuildLinuxAarch64, BuildMacOS, BuildWindows64, BuildWindowsARM64, BuildSnap]
     runs-on: ubuntu-latest
     permissions:
       contents: write
